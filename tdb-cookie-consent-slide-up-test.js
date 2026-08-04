@@ -3,7 +3,7 @@
 
   if (window.CookieScript?.instance?.__tdbLite) return;
 
-  const VERSION = '1.1.0-slide-up-test';
+  const VERSION = '1.2.0-slide-animation-test';
   const COOKIE_NAME = 'CookieScriptConsent';
   const COOKIE_DAYS = 30;
   const ALL_CATEGORIES = ['performance', 'strict', 'targeting', 'functionality'];
@@ -44,12 +44,22 @@
       padding: 2rem !important;
       pointer-events: auto;
       transform: translate3d(0, calc(100% + 24px), 0);
-      transition: transform 420ms cubic-bezier(0.4, 0, 0.2, 1);
       will-change: transform;
+      animation: tdb-cookie-slide-in 420ms cubic-bezier(0.4, 0, 0.2, 1) both;
     }
 
-    #cookiescript_injected.tdb-cookie-visible {
-      transform: translate3d(0, 0, 0);
+    #cookiescript_injected.tdb-cookie-closing {
+      animation: tdb-cookie-slide-out 420ms cubic-bezier(0.4, 0, 0.2, 1) both;
+    }
+
+    @keyframes tdb-cookie-slide-in {
+      from { transform: translate3d(0, calc(100% + 24px), 0); }
+      to { transform: translate3d(0, 0, 0); }
+    }
+
+    @keyframes tdb-cookie-slide-out {
+      from { transform: translate3d(0, 0, 0); }
+      to { transform: translate3d(0, calc(100% + 24px), 0); }
     }
 
     #cookiescript_header {
@@ -138,19 +148,27 @@
         box-sizing: border-box !important;
         margin: 0 !important;
         border-radius: 0 !important;
-        transform: translate3d(0, 100%, 0);
+      }
+
+      @keyframes tdb-cookie-slide-in {
+        from { transform: translate3d(0, 100%, 0); }
+        to { transform: translate3d(0, 0, 0); }
+      }
+
+      @keyframes tdb-cookie-slide-out {
+        from { transform: translate3d(0, 0, 0); }
+        to { transform: translate3d(0, 100%, 0); }
       }
     }
 
     @media print {
-      #cookiescript_injected_wrapper {
-        display: none !important;
-      }
+      #cookiescript_injected_wrapper { display: none !important; }
     }
 
     @media (prefers-reduced-motion: reduce) {
-      #cookiescript_injected {
-        transition: none !important;
+      #cookiescript_injected,
+      #cookiescript_injected.tdb-cookie-closing {
+        animation-duration: 1ms !important;
       }
     }
   `;
@@ -158,13 +176,9 @@
   const HTML = `
     <div id="${WRAPPER_ID}" data-cs-id="cookiescript_injected">
       <div id="cookiescript_injected" tabindex="0" role="dialog" aria-modal="false" aria-label="Cookie consent dialog" data-nosnippet>
-        <div class="cookiescript_pre_header">
-          <div class="cookiescript_header_actions"></div>
-        </div>
+        <div class="cookiescript_pre_header"><div class="cookiescript_header_actions"></div></div>
         <div id="cookiescript_header">WE VALUE YOUR PRIVACY</div>
-        <div id="cookiescript_description">
-          <span>To respect your privacy, we use cookies only where they add value. Accept all to enjoy the full Dental Barns experience (videos, before &amp; after galleries, and interactive content).<br><br>Or continue to browse the website with essential cookies only.</span>
-        </div>
+        <div id="cookiescript_description"><span>To respect your privacy, we use cookies only where they add value. Accept all to enjoy the full Dental Barns experience (videos, before &amp; after galleries, and interactive content).<br><br>Or continue to browse the website with essential cookies only.</span></div>
         <div id="cookiescript_buttons">
           <div id="cookiescript_accept" tabindex="0" role="button">Accept all (full experience)</div>
           <div id="cookiescript_reject" tabindex="0" role="button">Essential only</div>
@@ -181,110 +195,71 @@
   }
 
   function safeDecode(value) {
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
+    try { return decodeURIComponent(value); } catch { return value; }
   }
 
   function normaliseCategories(value, action) {
     let categories = value;
-
     if (typeof categories === 'string') {
-      try {
-        categories = JSON.parse(categories);
-      } catch {
-        categories = categories.split(',');
-      }
+      try { categories = JSON.parse(categories); } catch { categories = categories.split(','); }
     }
-
     if (!Array.isArray(categories)) categories = [];
     categories = unique(categories.map(String));
-
-    if (action === 'accept' && categories.length === 0) {
-      categories = ALL_CATEGORIES.slice();
-    }
-
+    if (action === 'accept' && categories.length === 0) categories = ALL_CATEGORIES.slice();
     if (!categories.includes('strict')) categories.push('strict');
     return categories;
   }
 
   function readDecision() {
-    const row = document.cookie
-      .split('; ')
-      .find(item => item.startsWith(`${COOKIE_NAME}=`));
-
+    const row = document.cookie.split('; ').find(item => item.startsWith(`${COOKIE_NAME}=`));
     if (!row) return { action: undefined, categories: STRICT_ONLY.slice() };
 
     const raw = row.slice(COOKIE_NAME.length + 1);
     let data = null;
-
     for (const candidate of [raw, safeDecode(raw)]) {
-      try {
-        data = JSON.parse(candidate);
-        break;
-      } catch {}
+      try { data = JSON.parse(candidate); break; } catch {}
     }
-
-    if (!data || typeof data !== 'object') {
-      return { action: undefined, categories: STRICT_ONLY.slice() };
-    }
+    if (!data || typeof data !== 'object') return { action: undefined, categories: STRICT_ONLY.slice() };
 
     let action = data.action ?? data.a;
     if (action === 'acceptall') action = 'accept';
     if (!['accept', 'reject'].includes(action)) action = undefined;
 
-    const categories = normaliseCategories(data.categories ?? data.c, action);
-    const state = { action, categories };
+    const state = { action, categories: normaliseCategories(data.categories ?? data.c, action) };
     if (data.key) state.key = data.key;
     return state;
   }
 
   function writeDecision(action, categories) {
-    const storedCategories =
-      action === 'accept'
-        ? unique(categories.filter(category => category !== 'strict'))
-        : [];
-
-    const value = encodeURIComponent(
-      JSON.stringify({
-        action,
-        categories: storedCategories,
-        consenttime: Math.floor(Date.now() / 1000),
-      }),
-    );
-
+    const storedCategories = action === 'accept'
+      ? unique(categories.filter(category => category !== 'strict'))
+      : [];
+    const value = encodeURIComponent(JSON.stringify({
+      action,
+      categories: storedCategories,
+      consenttime: Math.floor(Date.now() / 1000),
+    }));
     const expires = new Date(Date.now() + COOKIE_DAYS * 864e5).toUTCString();
     const secure = location.protocol === 'https:' ? '; Secure' : '';
-
     document.cookie = `${COOKIE_NAME}=${value}; Expires=${expires}; Path=/; SameSite=Lax${secure}`;
   }
 
   function dispatch(name, detail) {
-    document.dispatchEvent(
-      new CustomEvent(name, { bubbles: true, cancelable: true, detail }),
-    );
+    document.dispatchEvent(new CustomEvent(name, { bubbles: true, cancelable: true, detail }));
   }
 
   function pushConsentUpdate(categories) {
     window.dataLayer = window.dataLayer || [];
-    window.dataLayer.push({
-      event: `CookieScriptConsentUpdated[${categories.join(',')}]`,
-    });
+    window.dataLayer.push({ event: `CookieScriptConsentUpdated[${categories.join(',')}]` });
   }
 
-  function dispatchState() {
-    dispatch('CookieScriptCurrentState', api.currentState());
-  }
-
+  function dispatchState() { dispatch('CookieScriptCurrentState', api.currentState()); }
   function dispatchCategories(categories) {
     categories.forEach(category => dispatch(`CookieScriptCategory-${category}`));
   }
 
   function ensureStyle() {
     if (document.querySelector('style[data-tdb-cookie-consent-lite]')) return;
-
     const style = document.createElement('style');
     style.setAttribute('data-tdb-cookie-consent-lite', VERSION);
     style.textContent = CSS;
@@ -302,7 +277,6 @@
 
   function show() {
     if (open || document.getElementById(WRAPPER_ID)) return;
-
     ensureStyle();
     lastFocus = document.activeElement;
     document.body.insertAdjacentHTML('beforeend', HTML);
@@ -312,21 +286,17 @@
     const accept = document.getElementById('cookiescript_accept');
     const reject = document.getElementById('cookiescript_reject');
 
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        panel.classList.add('tdb-cookie-visible');
-      });
-    });
+    panel.addEventListener('animationend', () => {
+      panel.style.willChange = 'auto';
+    }, { once: true });
 
     activateWithKeyboard(accept, api.acceptAllAction);
     activateWithKeyboard(reject, api.rejectAllAction);
 
     panel.addEventListener('keydown', event => {
       if (event.key !== 'Tab') return;
-
       const controls = [accept, reject];
       const index = controls.indexOf(document.activeElement);
-
       if (event.shiftKey && index <= 0) {
         event.preventDefault();
         reject.focus();
@@ -340,31 +310,24 @@
   function hide() {
     const wrapper = document.getElementById(WRAPPER_ID);
     if (!wrapper) return;
-
     const panel = document.getElementById('cookiescript_injected');
 
     const finish = () => {
       wrapper.remove();
       open = false;
-
       if (lastFocus instanceof HTMLElement && document.contains(lastFocus)) {
         lastFocus.focus({ preventScroll: true });
       }
     };
 
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      finish();
-      return;
-    }
-
-    panel.classList.remove('tdb-cookie-visible');
+    panel.style.willChange = 'transform';
+    panel.classList.add('tdb-cookie-closing');
     setTimeout(finish, MOTION_MS);
   }
 
   function acceptAll() {
     writeDecision('accept', ALL_CATEGORIES);
     hide();
-
     setTimeout(() => {
       api.onAcceptAll();
       dispatch('CookieScriptAcceptAll');
@@ -377,7 +340,6 @@
   function rejectAll() {
     writeDecision('reject', STRICT_ONLY);
     hide();
-
     setTimeout(() => {
       api.onReject();
       dispatch('CookieScriptReject');
@@ -405,24 +367,14 @@
     acceptAllAction: acceptAll,
     rejectAllAction: rejectAll,
     acceptAction(categories) {
-      if (Array.isArray(categories) && categories.includes('performance')) {
-        acceptAll();
-      } else {
-        rejectAll();
-      }
+      if (Array.isArray(categories) && categories.includes('performance')) acceptAll();
+      else rejectAll();
     },
     applyCurrentCookiesState: dispatchState,
-    forceDispatchCSLoadEvent() {
-      dispatch('CookieScriptLoaded');
-    },
+    forceDispatchCSLoadEvent() { dispatch('CookieScriptLoaded'); },
     getCookieValueForQueryArg() {
-      const row = document.cookie
-        .split('; ')
-        .find(item => item.startsWith(`${COOKIE_NAME}=`));
-
-      return row
-        ? `${COOKIE_NAME}=${encodeURIComponent(row.slice(COOKIE_NAME.length + 1))}`
-        : '';
+      const row = document.cookie.split('; ').find(item => item.startsWith(`${COOKIE_NAME}=`));
+      return row ? `${COOKIE_NAME}=${encodeURIComponent(row.slice(COOKIE_NAME.length + 1))}` : '';
     },
   };
 
